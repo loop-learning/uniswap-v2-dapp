@@ -7,10 +7,23 @@ import { ArrowsUpDownIcon } from "@heroicons/react/24/outline";
 import { useAccount, useBalance, useReadContract } from "wagmi";
 import { useEffect } from "react";
 import {
+  createPublicClient,
   erc20Abi,
   formatEther,
   formatUnits,
+  http,
+  parseEther,
 } from "viem";
+import {
+  ChainId,
+  CurrencyAmount,
+  Token,
+  TradeType,
+  WETH9,
+} from "@uniswap/sdk-core";
+import { Pair, Route, Trade } from "@uniswap/v2-sdk";
+import { anvilFork } from "../providers/AppkitProvider.jsx";
+import IUniswapV2PairABI from "@uniswap/v2-periphery/build/IUniswapV2Pair.json";
 
 // DAI token contract address on Ethereum mainnet
 const daiAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
@@ -52,6 +65,74 @@ export default function SwapCard() {
     args: [address],
   });
 
+  // Token objects for Uniswap SDK
+  const WETH = WETH9[ChainId.MAINNET];
+  const DAI = new Token(
+    ChainId.MAINNET,
+    daiAddress,
+    18,
+    "DAI",
+    "Dai Stablecoin"
+  );
+
+  // Public client for blockchain interactions
+  const client = createPublicClient({
+    chain: [anvilFork],
+    transport: http(anvilFork.rpcUrls.default.http),
+  });
+
+  // Fetch reserves for a Uniswap V2 pair
+  const fetchPairReserves = async (tokenA, tokenB) => {
+    const pairAddress = Pair.getAddress(tokenA, tokenB);
+    const reserves = await client.readContract({
+      address: pairAddress,
+      abi: IUniswapV2PairABI.abi,
+      functionName: "getReserves",
+    });
+    console.log("Reserves: ", reserves);
+    return reserves;
+  };
+
+  // Create a Uniswap V2 Pair object using fetched reserves
+  const getPairObject = async () => {
+    const tokens = [DAI, WETH];
+
+    const [token0, token1] = tokens[0].sortsBefore(tokens[1])
+      ? tokens
+      : [token1, token0];
+
+    const reserves = await fetchPairReserves(token0, token1);
+
+    const currencyAmount0 = CurrencyAmount.fromRawAmount(
+      token0,
+      reserves[0].toString()
+    );
+    const currencyAmount1 = CurrencyAmount.fromRawAmount(
+      token1,
+      reserves[1].toString()
+    );
+
+    const pair = new Pair(currencyAmount0, currencyAmount1);
+
+    return pair;
+  };
+
+  // Fetch the best route and trade for the swap using Uniswap SDK
+  const fetchRouteAndTrade = async (inputAmount, inputToken, outputToken) => {
+    const pair = await getPairObject();
+    const route = new Route([pair], inputToken, outputToken);
+    const trade = new Trade(route, inputAmount, TradeType.EXACT_INPUT);
+    console.log(trade.executionPrice.toSignificant(6));
+  };
+
+  // Handler for the Swap button click
+  const handleSwapClick = async () => {
+    fetchRouteAndTrade(
+      CurrencyAmount.fromRawAmount(fromToken, parseEther(1).toString()),
+      WETH,
+      DAI
+    );
+  };
 
   // Update token balances when fetched
   useEffect(() => {
@@ -119,6 +200,7 @@ export default function SwapCard() {
         <button
           type="button"
           className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium hover:bg-blue-700 transition"
+          onClick={handleSwapClick}
         >
           Swap
         </button>
