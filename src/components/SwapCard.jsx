@@ -1,29 +1,37 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import TokenSelector from "./TokenSelector.jsx";
 import ConnectWalletButton from "./ConnectWalletButton.jsx";
 import SettingsModal from "./SettingsModal.jsx";
 import { ArrowsUpDownIcon } from "@heroicons/react/24/outline";
-import { useAccount, useBalance, useReadContract } from "wagmi";
+import { useAccount, useBalance, useReadContract, useWriteContract } from "wagmi";
 import { useEffect } from "react";
 import { createPublicClient, erc20Abi, formatEther, formatUnits, http, parseEther } from "viem";
-import { ChainId, CurrencyAmount, Token, TradeType, WETH9 } from "@uniswap/sdk-core";
+import { ChainId, CurrencyAmount, Percent, Token, TradeType, WETH9 } from "@uniswap/sdk-core";
 import { Pair, Route, Trade } from "@uniswap/v2-sdk";
 import { anvilFork } from "../providers/AppkitProvider.jsx";
 import IUniswapV2PairABI from "@uniswap/v2-periphery/build/IUniswapV2Pair.json"
-
+import IUniswapV2RouterABI from "@uniswap/v2-periphery/build/IUniswapV2Router02.json"
 
 const daiAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
-
 export default function SwapCard() {
   const [fromToken, setFromToken] = useState({
     symbol: "ETH",
     balance: "1.234",
   });
-  const [toToken, setToToken] = useState({ symbol: "DAI", balance: "1000" });
+  
+  const [toToken, setToToken] = useState({ 
+    symbol: "DAI", 
+    balance: "1000"
+  });
+  
   const [fromAmount, setFromAmount] = useState("");
   const [toAmount, setToAmount] = useState("");
+  
   const [showSettings, setShowSettings] = useState(false);
   const [isSwappingFromEth, setIsSwappingFromEth] = useState(true)
+
+  const SLIPPAGE_TOLERANCE = 0.5;
+  const TRANSACTION_DEADLINE = 20;
 
   const handleSwap = () => {
     setFromToken(toToken);
@@ -32,6 +40,8 @@ export default function SwapCard() {
     setToAmount(fromAmount);
     setIsSwappingFromEth(!isSwappingFromEth)
   };
+
+  const { writeContractAsync } = useWriteContract()
 
   const { address } = useAccount()
 
@@ -118,6 +128,73 @@ export default function SwapCard() {
     }
   }
 
+  const buildSwapTransaction = async () => {
+    let inputAmount, trade, inputToken, outputToken
+    inputToken = isSwappingFromEth ? WETH : DAI
+    outputToken = isSwappingFromEth ? DAI : WETH
+    inputAmount = CurrencyAmount.fromRawAmount(inputToken, parseEther(fromAmount.toString()).toString())
+    trade = await fetchRouteAndTrade(inputAmount, inputToken, outputToken)
+    
+    const slippageBasisPoints = Math.floor(SLIPPAGE_TOLERANCE * 100).toString()
+    const slippageTolerance = new Percent(slippageBasisPoints, "10000")
+    const amountOutMin = trade.trade.minimumAmountOut(slippageTolerance)
+    
+    const swapParams = {
+      amountIn: parseEther(trade.trade.inputAmount.toExact()),
+      amountOutMin: parseEther(amountOutMin.toExact()),
+      path: isSwappingFromEth ? [WETH.address, DAI.address] : [DAI.address, WETH.address],
+      to: address,
+      deadline: Math.floor(Date.now() / 1000 + 60 * TRANSACTION_DEADLINE)
+    }
+    return swapParams
+  }
+
+  const approveTokens = async (amount) => {
+    try {
+      const hash = await writeContractAsync({
+        address: DAI.address,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: ["0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", parseEther(amount.toString())]
+      })
+      return amount;
+    }
+    catch {
+      alert("Approval Failed!")
+    }
+  }
+
+  const executeSwap = async () => {
+    try {
+      const swapParams = await buildSwapTransaction();
+      let args = Object.values(swapParams)
+      if (isSwappingFromEth) {
+        args.shift()
+
+      }
+      else {
+        await approveTokens(args[0])
+      }
+      const tx = await writeContractAsync({
+        address: "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+        abi: IUniswapV2RouterABI.abi,
+        functionName: isSwappingFromEth ? "swapExactETHForTokens" : "swapExactTokensForETH",
+        args: args,
+        value: isSwappingFromEth ? swapParams.amountIn : 0
+      })
+      let receipt = await client.waitForTransactionReceipt({ hash: tx })
+      if (receipt.status === "success") {
+        alert("Swap Success!")
+      }
+      else {
+        alert("Swap Failed!")
+      }
+    }
+    catch (error) {
+      console.log(error)
+    }
+  }
+
   return (
     <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6">
       <h2 className="text-xl font-semibold text-gray-800 mb-4 text-center">
@@ -155,6 +232,9 @@ export default function SwapCard() {
           >
             Settings
           </button>
+          <div className="text-xs text-gray-500">
+            Slippage: {SLIPPAGE_TOLERANCE}% | Deadline: {TRANSACTION_DEADLINE}m
+          </div>
         </div>
         <button
           type="button"
@@ -165,7 +245,11 @@ export default function SwapCard() {
         </button>
         <ConnectWalletButton />
       </div>
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsModal 
+          onClose={() => setShowSettings(false)} 
+        />
+      )}
     </div>
   );
 }
