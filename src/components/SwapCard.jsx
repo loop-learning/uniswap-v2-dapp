@@ -1,11 +1,11 @@
 // SwapCard component handles the main swap UI and logic for token exchange
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import TokenSelector from "./TokenSelector.jsx";
 import ConnectWalletButton from "./ConnectWalletButton.jsx";
 import SettingsModal from "./SettingsModal.jsx";
 import { ArrowsUpDownIcon } from "@heroicons/react/24/outline";
-
-
+import { useAccount, useBalance } from "wagmi";
+import { formatUnits } from "viem";
 
 
 export default function SwapCard() {
@@ -29,8 +29,23 @@ export default function SwapCard() {
     setIsSwappingFromEth(!isSwappingFromEth);
   };
 
+  // Get connected wallet address
+  const { address } = useAccount();
 
-  // Dummy code: balances are static, not fetched
+  // Fetch native ETH balance
+  const { data: nativeBalance, isFetched: isFetchedNative } = useBalance({
+    address: address,
+  });
+
+  // Update ETH balance when fetched
+  useEffect(() => {
+    if (isFetchedNative && nativeBalance) {
+      setFromToken((prev) => ({
+        ...prev,
+        balance: formatUnits(nativeBalance.value, nativeBalance.decimals),
+      }));
+    }
+  }, [nativeBalance, isFetchedNative]);
 
   // Render the swap card UI
   return (
